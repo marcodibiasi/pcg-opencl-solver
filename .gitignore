@@ -1,0 +1,5 @@
+test-cases/
+.vscode/
+*.exe
+*.o
+test_cases.c
