@@ -47,14 +47,21 @@ typedef struct {
     OpenCLContext cl;
 } Solver;
 
+typedef struct{
+    cl_mem Ap;      // Used in alpha_calculate
+    cl_mem x;  // Used in update_x
+    cl_mem p;  // Used in update_p
+} TemporaryBuffers;
+
 Solver setup_solver(int size, CSRMatrix A, float *b, float *initial_x);
 OpenCLContext setup_opencl_context(Solver solver);
+TemporaryBuffers init_buffers(Solver* solver, int length);
 void conjugate_gradient(Solver* solver);
-float alpha_calculate(Solver* solver, cl_mem* r, cl_mem* z, cl_mem* p);
+float alpha_calculate(Solver* solver, cl_mem* r, cl_mem* z, cl_mem* p, TemporaryBuffers* temp);
 float beta_calculate(Solver* solver, cl_mem* r_next, cl_mem* z_next, cl_mem* r, cl_mem* z); 
-void update_x(Solver* solver, cl_mem* p, float alpha, int length);
+void update_x(Solver* solver, cl_mem* p, float alpha, int length, TemporaryBuffers* temp);
 void update_r(Solver* solver, cl_mem* r, cl_mem* p, cl_mem* r_next, float alpha, int length);
-void update_p(Solver* solver, cl_mem* r, cl_mem* p, float beta, int length);
+void update_p(Solver* solver, cl_mem* r, cl_mem* p, float beta, int length, TemporaryBuffers* temp);
 float dot_product_handler(Solver* solver, cl_mem* vec1, cl_mem* vec2, int lenght);
 cl_event dot_product(Solver *solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int length);
 cl_event partial_sum_reduction(Solver *solver, cl_mem* in_buf, cl_mem* out_buf, int num_groups);
@@ -64,4 +71,6 @@ cl_event scale_vector(Solver* solver, cl_mem* vec, float scale, cl_mem* result, 
 cl_event mat_vec_multiply(Solver *solver, cl_mem* vec, cl_mem* result);
 cl_event mult_vectors(Solver* solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int length);
 void free_solver(Solver* solver);
+void free_temporarybuffers(TemporaryBuffers* temp);
 void print_buffer(OpenCLContext *cl, cl_mem buf, size_t size, int n);
+double profiling_event(cl_event event);

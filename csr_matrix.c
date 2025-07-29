@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "csr_matrix.h"
 
 CSRMatrix csrmatrix_from_file(FILE *file) {
@@ -32,23 +33,26 @@ CSRMatrix csrmatrix_from_file(FILE *file) {
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
             float value;
-
             if (fscanf(file, "%f", &value) != 1) {
                 fprintf(stderr, "Error reading matrix value at (%d, %d)\n", i, j);
                 exit(EXIT_FAILURE);
             }
 
             if (value != 0.0f) {
+                if (value_count >= nnz) {
+                    fprintf(stderr, "Too many non-zero values compared to header\n");
+                    exit(EXIT_FAILURE);
+                }
                 matrix.col_ind[value_count] = j;
                 matrix.values[value_count] = value;
                 value_count++;
             }
         }
-
         matrix.row_ptr[i + 1] = value_count;
     }
 
     if (value_count != nnz) {
+        printf("\nNon-zero counted: %d, Expected: %d", value_count, nnz);
         fprintf(stderr, "Number of non-zero elements does not match expected count\n");
         exit(EXIT_FAILURE);
     }

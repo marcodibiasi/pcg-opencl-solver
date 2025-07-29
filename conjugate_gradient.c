@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h> 
 #include <math.h>
+#include <time.h>
 #include "conjugate_gradient.h"
 #include "ocl_boiler.h"
 
@@ -87,9 +88,31 @@ OpenCLContext setup_opencl_context(Solver solver) {
     cl.kernels.get_inverted_diagonal = clCreateKernel(cl.prog, "get_inverted_diagonal", &err);
     ocl_check(err, "clCreateKernel failed");
 
-    cl.lws = 16;
+    cl.lws = 64;
 
     return cl;
+}
+
+TemporaryBuffers init_buffers(Solver* solver, int length) {
+    cl_int err;
+    TemporaryBuffers temp;
+
+    temp.Ap = clCreateBuffer(solver->cl.ctx, CL_MEM_READ_WRITE, length * sizeof(float), NULL, &err);
+    ocl_check(err, "clCreateBuffer failed for temp.Ap");
+
+    temp.x = clCreateBuffer(solver->cl.ctx, CL_MEM_READ_WRITE, length * sizeof(float), NULL, &err);
+    ocl_check(err, "clCreateBuffer failed for temp.x");
+
+    temp.p = clCreateBuffer(solver->cl.ctx, CL_MEM_READ_WRITE, length * sizeof(float), NULL, &err);
+    ocl_check(err, "clCreateBuffer failed for temp.p");
+
+    return temp;
+}
+
+void free_temporarybuffers(TemporaryBuffers* temp) {
+    if (temp->Ap) clReleaseMemObject(temp->Ap);
+    if (temp->x)  clReleaseMemObject(temp->x);
+    if (temp->p)  clReleaseMemObject(temp->p);
 }
 
 void conjugate_gradient(Solver* solver) {
@@ -100,9 +123,11 @@ void conjugate_gradient(Solver* solver) {
     int length = solver->A.rows;
     float r_norm;   // Residue norm
     float epsilon = 1e-5f;  // Convergence threshold
-    int max_iter = (int)sqrt(length);   // Maximum iterations
+    int max_iter = length;   // Maximum iterations
     float alpha;    // Step size along the search direction
     int k = 0;  // Iteration counter
+
+    TemporaryBuffers temp = init_buffers(solver, length);
 
     // printf("x: ");
     // print_buffer(cl, cl->x_buffer, length * sizeof(float), 20);
@@ -194,58 +219,91 @@ void conjugate_gradient(Solver* solver) {
     cl_mem z_next_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, length * sizeof(float), NULL, &err);
     ocl_check(err, "clCreateBuffer failed for r_next_buffer");
 
-    do {
 
+    // profiling 
+    struct timespec start, end;
+    struct timespec iter_start, iter_end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    do {
+        clock_gettime(CLOCK_MONOTONIC, &iter_start);
+
+        printf("\033[1;32mITERATION %d\033[0m\n", k);
         // alpha = dot(r, z) / dot(p, mat_vec(A, p))
-        alpha = alpha_calculate(solver, &r_buffer, &z_buffer, &direction_buffer);
-        printf("Iteration %d: alpha = %g\n", k, alpha);
+        printf("ALPHA CALCULATE\n");
+        alpha = alpha_calculate(solver, &r_buffer, &z_buffer, &direction_buffer, &temp);
+        printf("\n\tAlpha = %g\n", alpha);
 
         // Update the solution vector x = x + alpha * p
-        update_x(solver, &direction_buffer, alpha, length);
+        printf("\nUPDATE X\n");
+        update_x(solver, &direction_buffer, alpha, length, &temp);
 
         // Calculate the new residue r_(k+1) = r - alpha * mat_vec(A, p)
+        printf("\nUPDATE R\n");
         update_r(solver, &r_buffer, &direction_buffer, &r_next_buffer, alpha, length);
-
-        // Calculate the new preconditioned residue z_(k+1) = D^(-1) * r_(k+1)
-        cl_event z_evt = mult_vectors(solver, &diagonal_buffer, &r_next_buffer, &z_next_buffer, length);
-        ocl_check(err, "mult_vectors failed for z_next_buffer");
-        clWaitForEvents(1, &z_evt);
-        clReleaseEvent(z_evt);
 
         // Calculate the norm of the new residue ||r_(k+1)||
         r_norm = sqrt(dot_product_handler(solver, &r_next_buffer, &r_next_buffer, length));
-        printf("Iteration %d: Residue norm = %g\n", k, r_norm);
+        printf("\n\tResidue norm = %g\n", r_norm);
+
+        // Calculate the new preconditioned residue z_(k+1) = D^(-1) * r_(k+1)
+        printf("\nUPDATE Z\n\t(D^(-1) * r_(k+1))\n");
+        cl_event z_evt = mult_vectors(solver, &diagonal_buffer, &r_next_buffer, &z_next_buffer, length);
+        clWaitForEvents(1, &z_evt);
+
+        // profiling
+        double t = profiling_event(z_evt);
+        printf("%-40s %-6.3f ms\n", "\tmult_vectors kernel:", t);
+        clReleaseEvent(z_evt);
 
         // beta = dot(r_(k+1), z_(k+1)) / dot(r, z)
+        printf("\nBETA CALCULATE\n");
         float beta = beta_calculate(solver, &r_next_buffer, &z_next_buffer, &r_buffer, &z_buffer);  
-        printf("Iteration %d: beta = %g\n", k, beta);
+        printf("\n\tBeta = %g\n", beta);
 
         // Update the search direction p = z_(k+1) + beta * p
-        update_p(solver, &z_next_buffer, &direction_buffer, beta, length);
+        printf("\nUPDATE P\n");
+        update_p(solver, &z_next_buffer, &direction_buffer, beta, length, &temp);
 
         // Update the residue for the next iteration
+        printf("\nCOPY R BUFFER\n");
         cl_event rcopy_evt;
         err = clEnqueueCopyBuffer(cl->q, r_next_buffer, r_buffer, 0, 0, length * sizeof(float), 0, NULL, &rcopy_evt);
         clWaitForEvents(1, &rcopy_evt);
+
+        // profiling
+        t = profiling_event(rcopy_evt);
+        printf("%-40s %-6.3f ms\n", "\tclEnqueueCopyBuffer:", t);
         clReleaseEvent(rcopy_evt);
         ocl_check(err, "clEnqueueCopyBuffer failed for r_buffer");
 
         // Update the preconditioned residue for the next iteration
+        printf("\nCOPY Z BUFFER\n");
         cl_event zcopy_evt;
         err = clEnqueueCopyBuffer(cl->q, z_next_buffer, z_buffer, 0, 0, length * sizeof(float), 0, NULL, &zcopy_evt);
         clWaitForEvents(1, &zcopy_evt);
+
+        // profiling
+        t = profiling_event(zcopy_evt);
+        printf("%-40s %-6.3f ms\n", "\tclEnqueueCopyBuffer:", t);
         clReleaseEvent(zcopy_evt);
         ocl_check(err, "clEnqueueCopyBuffer failed for z_buffer");
 
-        printf("\nX: ");
-        print_buffer(cl, cl->x_buffer, length * sizeof(float), 20);
+        // printf("\nX: ");
+        // print_buffer(cl, cl->x_buffer, length * sizeof(float), 20);
+        clock_gettime(CLOCK_MONOTONIC, &iter_end);
+        double iter_elapsed = (iter_end.tv_sec - iter_start.tv_sec) + (iter_end.tv_nsec - iter_start.tv_nsec) / 1e9;
+        printf("\nIteration %d time: %.3f s\n", k, iter_elapsed);
 
-        printf(" \n ");
+        printf("\n");
         k++;
 
     } while(r_norm > epsilon && k < max_iter);
 
-    printf("\nX_f: ");
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    printf("\nX (snippet): ");
     print_buffer(cl, cl->x_buffer, length * sizeof(float), 20);
 
     clReleaseMemObject(diagonal_buffer);
@@ -254,31 +312,35 @@ void conjugate_gradient(Solver* solver) {
     clReleaseMemObject(direction_buffer);
     clReleaseMemObject(r_next_buffer);
     clReleaseMemObject(z_next_buffer);
+    free_temporarybuffers(&temp);
 
     printf("\nConjugate Gradient converged after %d iterations with norm %g\n", k, r_norm);
+    printf("Total time: %.3f s\n", elapsed);
     return;
 }
 
-float alpha_calculate(Solver* solver, cl_mem *r, cl_mem *z, cl_mem *p) {
+float alpha_calculate(Solver* solver, cl_mem *r, cl_mem *z, cl_mem *p, TemporaryBuffers* temp) {
     cl_int err;
     OpenCLContext *cl = &solver->cl;
     int length = solver->size;
 
     // r * z
+    printf("\t(r · z)\n");
     float numerator = dot_product_handler(solver, r, z, length);
 
-    // p * A * p 
-    cl_mem Ap = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, length * sizeof(float), NULL, &err);
-    ocl_check(err, "clCreateBuffer failed for Ap");
-
-    cl_event mat_vec_multiply_evt = mat_vec_multiply(solver, p, &Ap);
+    // p * A * p
+    printf("\n\t(p * A * p)\n");
+    cl_event mat_vec_multiply_evt = mat_vec_multiply(solver, p, &temp->Ap);
     clWaitForEvents(1, &mat_vec_multiply_evt);
+
+    // profiling
+    double t = profiling_event(mat_vec_multiply_evt);
+    printf("%-40s %-6.3f ms\n", "\tmat_vec_multiply kernel:", t);
     clReleaseEvent(mat_vec_multiply_evt);
 
-    float denominator = dot_product_handler(solver, p, &Ap, length);
+    float denominator = dot_product_handler(solver, p, &temp->Ap, length);
 
-    printf("Alpha -> Numerator: %g, Denominator: %g\n", numerator, denominator);
-    clReleaseMemObject(Ap);
+    // printf("Alpha -> Numerator: %g, Denominator: %g\n", numerator, denominator);
 
     if (denominator == 0) {
         fprintf(stderr, "Denominator is zero, cannot compute alpha.\n");
@@ -289,31 +351,36 @@ float alpha_calculate(Solver* solver, cl_mem *r, cl_mem *z, cl_mem *p) {
 }
 
 float beta_calculate(Solver* solver, cl_mem *r_next, cl_mem *z_next, cl_mem *r, cl_mem *z) {
+    printf("\t(r_(k+1) · z_(k+1))\n");
     float nextr_dot_nextz = dot_product_handler(solver, r_next, z_next, solver->size);
+    printf("\t(r · z)\n");
     float r_dot_z = dot_product_handler(solver, r, z, solver->size);
     return nextr_dot_nextz / r_dot_z;
 }
 
-void update_x(Solver *solver, cl_mem* p, float alpha, int length) {
+void update_x(Solver *solver, cl_mem* p, float alpha, int length, TemporaryBuffers* temp) {
     OpenCLContext *cl = &solver->cl;
     cl_int err;
 
-    // Create a buffer for the updated x
-    cl_mem x_next_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, length * sizeof(float), NULL, &err);
-    ocl_check(err, "clCreateBuffer failed for x_next_buffer");
-
     // alpha * p
-    cl_event scale_vector_evt = scale_vector(solver, p, alpha, &x_next_buffer, length);
+    printf("\t(alpha * p)\n");
+    cl_event scale_vector_evt = scale_vector(solver, p, alpha, &temp->x, length);
     clWaitForEvents(1, &scale_vector_evt);
+
+    // profiling
+    double t = profiling_event(scale_vector_evt);
+    printf("%-40s %-6.3f ms\n", "\tscale_vector kernel:", t);
     clReleaseEvent(scale_vector_evt);
 
     // Add the scaled p to x
-    cl_event sum_vectors_evt = sum_vectors(solver, &cl->x_buffer, &x_next_buffer, &cl->x_buffer, length);
+    printf("\t(x + alpha * p)\n");
+    cl_event sum_vectors_evt = sum_vectors(solver, &cl->x_buffer, &temp->x, &cl->x_buffer, length);
     clWaitForEvents(1, &sum_vectors_evt);
-    clReleaseEvent(sum_vectors_evt);
 
-    // Release the temporary buffer
-    clReleaseMemObject(x_next_buffer);
+    // profiling
+    t = profiling_event(sum_vectors_evt);
+    printf("%-40s %-6.3f ms\n", "\tsum_vectors kernel:", t);    
+    clReleaseEvent(sum_vectors_evt);
 }   
 
 void update_r(Solver *solver, cl_mem* r, cl_mem* p, cl_mem* r_next, float alpha, int length) {
@@ -321,40 +388,59 @@ void update_r(Solver *solver, cl_mem* r, cl_mem* p, cl_mem* r_next, float alpha,
     cl_int err;
 
     // A * p
+    printf("\t(A * p)\n");
     cl_event mat_vec_multiply_evt = mat_vec_multiply(solver, p, r_next);
     clWaitForEvents(1, &mat_vec_multiply_evt);
+
+    // profiling    
+    double t = profiling_event(mat_vec_multiply_evt);
+    printf("%-40s %-6.3f ms\n", "\tmat_vec_multiply kernel:", t);
     clReleaseEvent(mat_vec_multiply_evt);
 
     // Scale the result by -alpha
+    printf("\t(-alpha * A * p)\n");
     cl_event scale_vector_evt = scale_vector(solver, r_next, -alpha, r_next, length);
     clWaitForEvents(1, &scale_vector_evt);
+
+    // profiling
+    t = profiling_event(scale_vector_evt);
+    printf("%-40s %-6.3f ms\n", "\tscale_vector kernel:", t);
     clReleaseEvent(scale_vector_evt);
 
     // Add the scaled result to the original residue
+    printf("\t(r - alpha * A * p)\n");
     cl_event sum_vectors_evt = sum_vectors(solver, r, r_next, r_next, length);
     clWaitForEvents(1, &sum_vectors_evt);
+
+    // profiling
+    t = profiling_event(sum_vectors_evt);
+    printf("%-40s %-6.3f ms\n", "\tsum_vectors kernel", t);
     clReleaseEvent(sum_vectors_evt);
 }
 
-void update_p(Solver *solver, cl_mem* z, cl_mem* p, float beta, int length) {
+void update_p(Solver *solver, cl_mem* z, cl_mem* p, float beta, int length, TemporaryBuffers* temp) {
     OpenCLContext *cl = &solver->cl;
     cl_int err;
-
-    cl_mem p_temp = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, length * sizeof(float), NULL, &err);
-    ocl_check(err, "clCreateBuffer failed for p_temp");
     
     // Scale the previous search direction p by beta
-    cl_event scale_vector_evt = scale_vector(solver, p, beta, &p_temp, length);
+    printf("\t(beta * p)\n");
+    cl_event scale_vector_evt = scale_vector(solver, p, beta, &temp->p, length);
     clWaitForEvents(1, &scale_vector_evt);
+
+    // profiling
+    double t = profiling_event(scale_vector_evt);
+    printf("%-40s %-6.3f ms\n", "\tscale_vector kernel:", t);
     clReleaseEvent(scale_vector_evt);
 
     // Add the new residue r to the scaled search direction
-    cl_event sum_vectors_evt = sum_vectors(solver, z, &p_temp, p, length);
+    printf("\t(z + beta * p)\n");
+    cl_event sum_vectors_evt = sum_vectors(solver, z, &temp->p, p, length);
     clWaitForEvents(1, &sum_vectors_evt);
-    clReleaseEvent(sum_vectors_evt);
 
-    // Release the temporary buffer
-    clReleaseMemObject(p_temp);
+    // profiling
+    t = profiling_event(sum_vectors_evt);
+    printf("%-40s %-6.3f ms\n", "\tsum_vectors kernel:", t);
+    clReleaseEvent(sum_vectors_evt);
 }
 
 float dot_product_handler(Solver *solver, cl_mem *vec1, cl_mem *vec2, int length) {
@@ -366,17 +452,29 @@ float dot_product_handler(Solver *solver, cl_mem *vec1, cl_mem *vec2, int length
     cl_mem partial_dot_product = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, sizeof(float) * num_groups, NULL, &err);
     cl_event dot_event = dot_product(solver, vec1, vec2, &partial_dot_product, length);
     clWaitForEvents(1, &dot_event);
+
+    // Profiling
+    double t = profiling_event(dot_event);
+    printf("%-40s %-6.3f ms\n", "\tdot_product kernel:", t);
+
     clReleaseEvent(dot_event);
 
-    cl_mem temp_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, length * sizeof(float), NULL, NULL);
+    cl_mem temp_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, num_groups * sizeof(float), NULL, NULL);
 
     cl_mem *in_buf = &partial_dot_product;
     cl_mem *out_buf = &temp_buffer;
 
+    double total_time = 0.0;
+    t = 0.0;
     while(num_groups > 1) {
         // Perform partial sum reduction
         cl_event partial_sum_evt = partial_sum_reduction(solver, in_buf, out_buf, num_groups);
         clWaitForEvents(1, &partial_sum_evt);
+
+        // Profiling
+        t = profiling_event(partial_sum_evt);
+        total_time += t;
+
         clReleaseEvent(partial_sum_evt);
 
         // Swap buffers
@@ -386,6 +484,8 @@ float dot_product_handler(Solver *solver, cl_mem *vec1, cl_mem *vec2, int length
 
         num_groups = round_div_up(num_groups, cl->lws);
     }
+
+    printf("%-40s %-6.3f ms\n", "\tpartial_sum_reduction kernel (total):", total_time);
 
     float final_result;
     clEnqueueReadBuffer(cl->q, *in_buf, CL_TRUE, 0, sizeof(float), &final_result, 0, NULL, NULL);
@@ -683,4 +783,11 @@ void print_buffer(OpenCLContext *cl, cl_mem buf, size_t size, int n) {
     }
     printf("\n");
     free(temp);
+}
+
+double profiling_event(cl_event event) {
+    cl_ulong start, end;
+    clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_START, sizeof(start), &start, NULL);
+    clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END, sizeof(end), &end, NULL);
+    return (end - start) / 1e6; // Convert to milliseconds
 }
