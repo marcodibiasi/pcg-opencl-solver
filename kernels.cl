@@ -62,6 +62,25 @@ __kernel void dot_product(
 
 }
 
+__kernel void dot_product_vec4(
+    __global const float4* a,
+    __global const float4* b,
+    __global float* result,
+    const int length 
+){
+    int global_id = get_global_id(0);
+    if(global_id >= length) return;
+
+    float local_product = 0.0;
+    float4 a_val = a[global_id];
+    float4 b_val = b[global_id];
+
+    local_product += (a_val.x * b_val.x) + (a_val.y * b_val.y) +
+        (a_val.z * b_val.z) + (a_val.w * b_val.w);
+
+    result[global_id] = local_product;
+}
+
 
 __kernel void mat_vec_multiply(
 

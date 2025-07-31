@@ -21,12 +21,12 @@ int main(){
     int size = 65536/16; // Size of the vector
 
     zero_vector(filename, size);
-    // identity_matrix(identity_filename, size);
+    identity_matrix(identity_filename, size);
     sin_vector(sin_filename, size);
     // random_diagonal_matrix(random_diagonal_filename, size);
     banded_matrix(banded_filename, size, 2);
     printf("Zero vector of size %d written to %s\n", size, filename);
-    // printf("Identity matrix of size %d written to %s\n", size, identity_filename);
+    printf("Identity matrix of size %d written to %s\n", size, identity_filename);
     printf("Sine vector of size %d written to %s\n", size, sin_filename);
     // printf("Random diagonal matrix of size %d written to %s\n", size, random_diagonal_filename);
     printf("Random banded matrix of size %d written to %s\n", size, banded_filename);
@@ -75,7 +75,7 @@ void identity_matrix(char* fname, int size) {
     for (int i = 0; i < size; i++) {
         for (int j = 0; j < size; j++) {
             if (i == j) {
-                fprintf(file, "10000.0 "); // Diagonal elements
+                fprintf(file, "1.0 "); // Diagonal elements
             } else {
                 fprintf(file, "0.0 "); // Off-diagonal elements
             }

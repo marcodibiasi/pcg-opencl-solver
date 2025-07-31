@@ -10,6 +10,7 @@
 typedef struct{
     cl_kernel partial_sum_reduction;
     cl_kernel dot_product;
+    cl_kernel dot_product_vec4;
     cl_kernel mat_vec_multiply;
     cl_kernel mult_vectors;
     cl_kernel sum_vectors;
@@ -64,6 +65,7 @@ void update_r(Solver* solver, cl_mem* r, cl_mem* p, cl_mem* r_next, float alpha,
 void update_p(Solver* solver, cl_mem* r, cl_mem* p, float beta, int length, TemporaryBuffers* temp);
 float dot_product_handler(Solver* solver, cl_mem* vec1, cl_mem* vec2, int lenght);
 cl_event dot_product(Solver *solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int length);
+cl_event dot_product_vec4(Solver *solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int length);
 cl_event partial_sum_reduction(Solver *solver, cl_mem* in_buf, cl_mem* out_buf, int num_groups);
 cl_event get_inverted_diagonal(Solver* solver, cl_mem* diagonal, int length);
 cl_event sum_vectors(Solver* solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int lenght);
