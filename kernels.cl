@@ -304,19 +304,27 @@ __kernel void update_x(
 {
     int global_id = get_global_id(0);
     if (global_id < length) 
-        x[global_id] = x[global_id] + alpha * p[global_id];
+        x[global_id] += alpha * p[global_id];
 }  
 
-__kernel void update_r(
+__kernel void update_r_and_z(
     __global const double* r,
+    __global const double* Ap,
+    __global const double* precond,
     __global double* r_next,  // at the start it contains A * p  
+    __global double* z_next,
     const double alpha,
     const int length
 )
 {
     int global_id = get_global_id(0);
-    if (global_id < length) 
-        r_next[global_id] = r[global_id] - alpha * r_next[global_id];
+    double r_i;
+
+    if (global_id < length) {
+        r_i = r[global_id] - alpha * Ap[global_id];
+        r_next[global_id] = r_i;
+        z_next[global_id] = r_i * precond[global_id];
+    }
 }  
 
 __kernel void update_p(
@@ -327,6 +335,8 @@ __kernel void update_p(
 )
 {
     int global_id = get_global_id(0);
-    if (global_id < length) 
+    if (global_id < length) {
+        
         p[global_id] = z[global_id] + beta * p[global_id];
+    }
 } 

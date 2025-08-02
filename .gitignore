@@ -2,3 +2,4 @@
 *.exe
 *.o
 test-cases/
+deprecated.c

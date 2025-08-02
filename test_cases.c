@@ -22,15 +22,15 @@ int main(){
     char *banded_filename = "test-cases/banded_matrix.txt";
     int size = 1024*1024; // Size of the vector
 
-    zero_vector(filename, size);
+    //zero_vector(filename, size);
     //identity_matrix(identity_filename, size);
     sin_vector(sin_filename, size);
-    banded_matrix_sparse(banded_sparse_filename, size, 2);  
+    //banded_matrix_sparse(banded_sparse_filename, size, 2);  
 
     // random_diagonal_matrix(random_diagonal_filename, size);
     //banded_matrix(banded_filename, size, 2);
-    printf("Zero vector of size %d written to %s\n", size, filename);
-    printf("Banded sparse matrix of size %d written to %s\n", size, banded_sparse_filename);
+    //printf("Zero vector of size %d written to %s\n", size, filename);
+    //printf("Banded sparse matrix of size %d written to %s\n", size, banded_sparse_filename);
     // printf("Identity matrix of size %d written to %s\n", size, identity_filename);
     printf("Sine vector of size %d written to %s\n", size, sin_filename);
     // printf("Random diagonal matrix of size %d written to %s\n", size, random_diagonal_filename);

@@ -68,28 +68,27 @@ typedef struct{
     cl_mem p;  // Used in update_p
 } TemporaryBuffers;
 
-Solver setup_solver(int size, CSRMatrix A, CBMatrix A_cbm, double *b, double *initial_x);
+Solver setup_solver(int size, CBMatrix A_cbm, double *b, double *initial_x);
 OpenCLContext setup_opencl_context(Solver solver);
 TemporaryBuffers init_buffers(Solver* solver, int length);
 void conjugate_gradient(Solver* solver);
-double alpha_calculate(Solver* solver, cl_mem* r, cl_mem* z, cl_mem* p, TemporaryBuffers* temp);
-double beta_calculate(Solver* solver, cl_mem* r_next, cl_mem* z_next, cl_mem* r, cl_mem* z); 
+double alpha_calculate(Solver* solver, cl_mem* r, cl_mem* z, cl_mem* p, TemporaryBuffers* temp, double *r_dot_z);
 // void update_x(Solver* solver, cl_mem* p, double alpha, int length, TemporaryBuffers* temp);
-void update_r(Solver* solver, cl_mem* r, cl_mem* p, cl_mem* r_next, double alpha, int length);
+// void update_r(Solver* solver, cl_mem* r, cl_mem* p, cl_mem* r_next, double alpha, int length);
 // void update_p(Solver* solver, cl_mem* r, cl_mem* p, double beta, int length, TemporaryBuffers* temp);
 double dot_product_handler(Solver* solver, cl_mem* vec1, cl_mem* vec2, int lenght);
 cl_event dot_product(Solver *solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int length);
 cl_event dot_product_vec4(Solver *solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int length);
 cl_event partial_sum_reduction(Solver *solver, cl_mem* in_buf, cl_mem* out_buf, int num_groups);
-cl_event get_inverted_diagonal(Solver* solver, cl_mem* diagonal, int length);
+// cl_event get_inverted_diagonal(Solver* solver, cl_mem* diagonal, int length);
 cl_event sum_vectors(Solver* solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int lenght);
 cl_event scale_vector(Solver* solver, cl_mem* vec, double scale, cl_mem* result, int lenght);
-cl_event mat_vec_multiply(Solver *solver, cl_mem* vec, cl_mem* result);
+// cl_event mat_vec_multiply(Solver *solver, cl_mem* vec, cl_mem* result);
 cl_event compressed_matvec_mult(Solver* solver, cl_mem* vec, cl_mem* result);
 cl_event mult_vectors(Solver* solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int length);
 cl_event update_x(Solver *solver, cl_mem* p, double alpha, int length);
 cl_event update_p(Solver *solver, cl_mem* p, cl_mem* z, double beta, int length);
-cl_event update_r_evt(Solver *solver, cl_mem* r, cl_mem* r_next, double alpha, int length);
+cl_event update_r_and_z(Solver* solver, cl_mem* r, cl_mem* Ap, cl_mem* precond, cl_mem* r_next, cl_mem* z_next, double alpha, int length);
 cl_event get_inverted_diagonal_compressed(Solver* solver, cl_mem* diagonal_buffer);
 void free_solver(Solver* solver);
 void free_temporarybuffers(TemporaryBuffers* temp);

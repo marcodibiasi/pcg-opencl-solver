@@ -12,10 +12,10 @@
 #include <CL/cl.h>
 #endif
 
-Solver setup_solver(int size, CSRMatrix A, CBMatrix A_cbm, double *b, double *initial_x) {
+Solver setup_solver(int size, CBMatrix A_cbm, double *b, double *initial_x) {
     Solver solver;
     solver.size = size;
-    solver.A = A;
+    // solver.A = A;
     solver.A_cbm = A_cbm;
     solver.b = b;
     solver.x = initial_x;
@@ -55,17 +55,17 @@ OpenCLContext setup_opencl_context(Solver solver) {
     ocl_check(err, "clCreateBuffer failed for x_buffer");
 
     //CSR Matrix buffers
-    cl.csr_row_ptr_buffer = clCreateBuffer(cl.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-        (solver.A.rows + 1) * sizeof(int), solver.A.row_ptr, &err);
-    ocl_check(err, "clCreateBuffer failed for csr_row_ptr_buffer");
+    // cl.csr_row_ptr_buffer = clCreateBuffer(cl.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+    //     (solver.A.rows + 1) * sizeof(int), solver.A.row_ptr, &err);
+    // ocl_check(err, "clCreateBuffer failed for csr_row_ptr_buffer");
 
-    cl.csr_col_ind_buffer = clCreateBuffer(cl.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-        solver.A.nnz * sizeof(int), solver.A.col_ind, &err);
-    ocl_check(err, "clCreateBuffer failed for csr_col_ind_buffer");
+    // cl.csr_col_ind_buffer = clCreateBuffer(cl.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+    //     solver.A.nnz * sizeof(int), solver.A.col_ind, &err);
+    // ocl_check(err, "clCreateBuffer failed for csr_col_ind_buffer");
 
-    cl.csr_values_buffer = clCreateBuffer(cl.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-        solver.A.nnz * sizeof(double), solver.A.values, &err);
-    ocl_check(err, "clCreateBuffer failed for csr_values_buffer");
+    // cl.csr_values_buffer = clCreateBuffer(cl.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+    //     solver.A.nnz * sizeof(double), solver.A.values, &err);
+    // ocl_check(err, "clCreateBuffer failed for csr_values_buffer");
 
     // CBM representation
     cl.cbm_rows = solver.A_cbm.rows;
@@ -110,7 +110,7 @@ OpenCLContext setup_opencl_context(Solver solver) {
     cl.kernels.update_x = clCreateKernel(cl.prog, "update_x", &err);
     ocl_check(err, "clCreateKernel failed for update_x");
 
-    cl.kernels.update_r = clCreateKernel(cl.prog, "update_r", &err);
+    cl.kernels.update_r = clCreateKernel(cl.prog, "update_r_and_z", &err);
     ocl_check(err, "clCreateKernel failed for update_r");
 
     cl.kernels.update_p = clCreateKernel(cl.prog, "update_p", &err);
@@ -148,7 +148,7 @@ void conjugate_gradient(Solver* solver) {
     OpenCLContext* cl = &solver->cl;
 
     // SETUP 
-    int length = solver->A.rows;
+    int length = solver->size;
     double r_norm;   // Residue norm
     double epsilon = 1e-10;  // Convergence threshold
     int max_iter = length;   // Maximum iterations
@@ -165,14 +165,10 @@ void conjugate_gradient(Solver* solver) {
     ocl_check(err, "clCreateBuffer failed for diagonal_buffer");
 
     // cl_event inverted_diagonal = get_inverted_diagonal(solver, &diagonal_buffer, length);
-    //cl_event inverted_diagonal = get_inverted_diagonal_compressed(solver, &diagonal_buffer, length);
+    // cl_event inverted_diagonal = get_inverted_diagonal_compressed(solver, &diagonal_buffer, length);
     cl_event inverted_diagonal = get_inverted_diagonal_compressed(solver, &diagonal_buffer);
     clWaitForEvents(1, &inverted_diagonal);
     clReleaseEvent(inverted_diagonal);
-
-    print_buffer(cl, diagonal_buffer, length * sizeof(double), 20);
-    double debug_dot = dot_product_handler(solver, &diagonal_buffer, &diagonal_buffer, length);
-    printf("DEBUG: Dot product of diagonal: %g\n", debug_dot);
 
     /*
     STEP ONE: Calculate initial residue r = b - Ax
@@ -222,7 +218,6 @@ void conjugate_gradient(Solver* solver) {
     /*
     STEP FOUR: main loop of the Conjugate Gradient algorithm
     */
-
     // Allocate buffers for the next iteration
     cl_mem r_next_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, length * sizeof(double), NULL, &err);
     ocl_check(err, "clCreateBuffer failed for r_next_buffer");
@@ -230,6 +225,7 @@ void conjugate_gradient(Solver* solver) {
     cl_mem z_next_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, length * sizeof(double), NULL, &err);
     ocl_check(err, "clCreateBuffer failed for r_next_buffer");
 
+    double r_dot_z;
 
     // profiling 
     struct timespec start, end;
@@ -242,40 +238,37 @@ void conjugate_gradient(Solver* solver) {
         printf("\033[1;32mITERATION %d\033[0m\n", k);
         // alpha = dot(r, z) / dot(p, mat_vec(A, p))
         printf("ALPHA CALCULATE\n");
-        double alpha = alpha_calculate(solver, &r_buffer, &z_buffer, &direction_buffer, &temp);
+        double alpha = alpha_calculate(solver, &r_buffer, &z_buffer, &direction_buffer, &temp, &r_dot_z);
         printf("\n\tAlpha = %g\n", alpha);
 
         // Update the solution vector x = x + alpha * p
         printf("\nUPDATE X\n");
         cl_event upd_x = update_x(solver, &direction_buffer, alpha, length);
-        clWaitForEvents(1, &upd_x);
-        double updx_t = profiling_event(upd_x);
-        printf("%-40s %-6.3f ms\n", "\tupdate_x kernel:", updx_t);
-        clReleaseEvent(upd_x);
-        // update_x(solver, &direction_buffer, alpha, length, &temp);
+        // USELESS WAIT FOR EVENT
+        // clWaitForEvents(1, &upd_x);
+        // double updx_t = profiling_event(upd_x);
+        // printf("%-40s %-6.3f ms\n", "\tupdate_x kernel:", updx_t);
+        // clReleaseEvent(upd_x);
 
         // Calculate the new residue r_(k+1) = r - alpha * mat_vec(A, p)
-        printf("\nUPDATE R\n");
-        update_r(solver, &r_buffer, &direction_buffer, &r_next_buffer, alpha, length);
+        // Calculate the new preconditioned residue z_(k+1) = D^(-1) * r_(k+1)
+        printf("\nUPDATE R AND Z\n");
+        cl_event next_r_z = update_r_and_z(solver, &r_buffer, &temp.Ap, &diagonal_buffer, &r_next_buffer, &z_next_buffer, alpha, length);
+        clWaitForEvents(1, &next_r_z);
+        double nextrz_t = profiling_event(next_r_z);
+        printf("%-40s %-6.3f ms\n", "\tupdate_r_and_z kernel:", nextrz_t);
+        clReleaseEvent(next_r_z);
         
-        printf("\nCALCULATE ||r_(k+1)||^2\n");    
+        // printf("\nCALCULATE ||r_(k+1)||^2\n");    
         // Calculate the norm of the new residue ||r_(k+1)||^2
         r_norm = dot_product_handler(solver, &r_next_buffer, &r_next_buffer, length);
         printf("\n\tResidue norm = %g\n", r_norm);
 
-        // Calculate the new preconditioned residue z_(k+1) = D^(-1) * r_(k+1)
-        printf("\nUPDATE Z\n\t(D^(-1) * r_(k+1))\n");
-        cl_event z_evt = mult_vectors(solver, &diagonal_buffer, &r_next_buffer, &z_next_buffer, length);
-        clWaitForEvents(1, &z_evt);
-
-        // profiling
-        double t = profiling_event(z_evt);
-        printf("%-40s %-6.3f ms\n", "\tmult_vectors kernel:", t);
-        clReleaseEvent(z_evt);
-
         // beta = dot(r_(k+1), z_(k+1)) / dot(r, z)
         printf("\nBETA CALCULATE\n");
-        double beta = beta_calculate(solver, &r_next_buffer, &z_next_buffer, &r_buffer, &z_buffer);  
+        printf("\t(r_(k+1) · z_(k+1))\n");
+        double nextr_dot_nextz = dot_product_handler(solver, &r_next_buffer, &z_next_buffer, solver->size); 
+        double beta = nextr_dot_nextz / r_dot_z;
         printf("\n\tBeta = %g\n", beta);
 
         // Update the search direction p = z_(k+1) + beta * p
@@ -283,36 +276,19 @@ void conjugate_gradient(Solver* solver) {
         cl_event upd_p = update_p(solver, &direction_buffer, &z_next_buffer, beta, length);
         clWaitForEvents(1, &upd_p);
         double updp_t = profiling_event(upd_p);
-        printf("%-40s %-6.3f ms\n", "\tupdate_x kernel:", updp_t);
+        printf("%-40s %-6.3f ms\n", "\tupdate_p kernel:", updp_t);
         clReleaseEvent(upd_p);
-        // update_p(solver, &z_next_buffer, &direction_buffer, beta, length, &temp);
 
-        // Update the residue for the next iteration
-        printf("\nCOPY R BUFFER\n");
-        cl_event rcopy_evt;
-        err = clEnqueueCopyBuffer(cl->q, r_next_buffer, r_buffer, 0, 0, length * sizeof(double), 0, NULL, &rcopy_evt);
-        clWaitForEvents(1, &rcopy_evt);
+        // Swap the buffers for the next iteration
+        cl_mem tmp;
+        tmp = r_buffer;
+        r_buffer = r_next_buffer;
+        r_next_buffer = tmp;
 
-        // profiling
-        t = profiling_event(rcopy_evt);
-        printf("%-40s %-6.3f ms\n", "\tclEnqueueCopyBuffer:", t);
-        clReleaseEvent(rcopy_evt);
-        ocl_check(err, "clEnqueueCopyBuffer failed for r_buffer");
+        tmp = z_buffer;
+        z_buffer = z_next_buffer;
+        z_next_buffer = tmp;
 
-        // Update the preconditioned residue for the next iteration
-        printf("\nCOPY Z BUFFER\n");
-        cl_event zcopy_evt;
-        err = clEnqueueCopyBuffer(cl->q, z_next_buffer, z_buffer, 0, 0, length * sizeof(double), 0, NULL, &zcopy_evt);
-        clWaitForEvents(1, &zcopy_evt);
-
-        // profiling
-        t = profiling_event(zcopy_evt);
-        printf("%-40s %-6.3f ms\n", "\tclEnqueueCopyBuffer:", t);
-        clReleaseEvent(zcopy_evt);
-        ocl_check(err, "clEnqueueCopyBuffer failed for z_buffer");
-
-        // printf("\nX: ");
-        // print_buffer(cl, cl->x_buffer, length * sizeof(double), 20);
         clock_gettime(CLOCK_MONOTONIC, &iter_end);
         double iter_elapsed = (iter_end.tv_sec - iter_start.tv_sec) + (iter_end.tv_nsec - iter_start.tv_nsec) / 1e9;
         printf("\nIteration %d time: %.3f s\n", k, iter_elapsed);
@@ -341,22 +317,22 @@ void conjugate_gradient(Solver* solver) {
     return;
 }
 
-double alpha_calculate(Solver* solver, cl_mem *r, cl_mem *z, cl_mem *p, TemporaryBuffers* temp) {
+double alpha_calculate(Solver* solver, cl_mem *r, cl_mem *z, cl_mem *p, TemporaryBuffers* temp, double *r_dot_z) {
     cl_int err;
     OpenCLContext *cl = &solver->cl;
     int length = solver->size;
 
     // r * z
     printf("\t(r · z)\n");
-    double numerator = dot_product_handler(solver, r, z, length);
+    *r_dot_z = dot_product_handler(solver, r, z, length);
 
     // p * A * p
     printf("\n\t(p * A * p)\n");
     //cl_event mat_vec_multiply_evt = mat_vec_multiply(solver, p, &temp->Ap);
     cl_event mat_vec_multiply_evt = compressed_matvec_mult(solver, p, &temp->Ap);
-    clWaitForEvents(1, &mat_vec_multiply_evt);
 
-    // profiling
+    //USELESS WAIT FOR EVENT
+    clWaitForEvents(1, &mat_vec_multiply_evt);
     double t = profiling_event(mat_vec_multiply_evt);
     printf("%-40s %-6.3f ms\n", "\tmat_vec_multiply kernel:", t);
     clReleaseEvent(mat_vec_multiply_evt);
@@ -370,56 +346,7 @@ double alpha_calculate(Solver* solver, cl_mem *r, cl_mem *z, cl_mem *p, Temporar
         exit(EXIT_FAILURE);
     }
 
-    return numerator / denominator;
-}
-
-double beta_calculate(Solver* solver, cl_mem *r_next, cl_mem *z_next, cl_mem *r, cl_mem *z) {
-    printf("\t(r_(k+1) · z_(k+1))\n");
-    double nextr_dot_nextz = dot_product_handler(solver, r_next, z_next, solver->size);
-    printf("\t(r · z)\n");
-    double r_dot_z = dot_product_handler(solver, r, z, solver->size);
-    return nextr_dot_nextz / r_dot_z;
-}
-
-void update_r(Solver *solver, cl_mem* r, cl_mem* p, cl_mem* r_next, double alpha, int length) {
-    OpenCLContext *cl = &solver->cl;
-    cl_int err;
-
-    // A * p
-    printf("\t(A * p)\n");
-    cl_event mat_vec_multiply_evt = mat_vec_multiply(solver, p, r_next);
-    clWaitForEvents(1, &mat_vec_multiply_evt);
-
-    // profiling    
-    double t = profiling_event(mat_vec_multiply_evt);
-    printf("%-40s %-6.3f ms\n", "\tmat_vec_multiply kernel:", t);
-    clReleaseEvent(mat_vec_multiply_evt);
-
-    cl_event next_r_evt = update_r_evt(solver, r, r_next, alpha, length);
-    clWaitForEvents(1, &next_r_evt);
-    t = profiling_event(next_r_evt);
-    printf("%-40s %-6.3f ms\n", "\tupdate_r kernel:", t);
-    clReleaseEvent(next_r_evt);
-
-    // // Scale the result by -alpha
-    // printf("\t(-alpha * A * p)\n");
-    // cl_event scale_vector_evt = scale_vector(solver, r_next, -alpha, r_next, length);
-    // clWaitForEvents(1, &scale_vector_evt);
-
-    // // profiling
-    // t = profiling_event(scale_vector_evt);
-    // printf("%-40s %-6.3f ms\n", "\tscale_vector kernel:", t);
-    // clReleaseEvent(scale_vector_evt);
-
-    // // Add the scaled result to the original residue
-    // printf("\t(r - alpha * A * p)\n");
-    // cl_event sum_vectors_evt = sum_vectors(solver, r, r_next, r_next, length);
-    // clWaitForEvents(1, &sum_vectors_evt);
-
-    // // profiling
-    // t = profiling_event(sum_vectors_evt);
-    // printf("%-40s %-6.3f ms\n", "\tsum_vectors kernel", t);
-    // clReleaseEvent(sum_vectors_evt);
+    return *r_dot_z / denominator;
 }
 
 cl_event partial_sum_reduction(Solver *solver, cl_mem* vec_in, cl_mem* vec_out, int length) {
@@ -560,85 +487,296 @@ cl_event dot_product_vec4(Solver *solver, cl_mem* vec1, cl_mem* vec2, cl_mem* re
     return event;
 }
 
-cl_event get_inverted_diagonal(Solver* solver, cl_mem* diagonal, int length) {
+cl_event update_x(Solver* solver, cl_mem* p, double alpha, int length) {
     OpenCLContext *cl = &solver->cl;
     cl_int err;
     cl_int arg = 0;
 
     // Set kernel arguments
-    err = clSetKernelArg(cl->kernels.get_inverted_diagonal, arg, sizeof(cl_mem), &cl->csr_values_buffer);
-    ocl_check(err, "clSetKernelArg failed for csr_values_buffer");
+    err = clSetKernelArg(cl->kernels.update_x, arg, sizeof(cl_mem), &cl->x_buffer);
+    ocl_check(err, "clSetKernelArg failed for x_buffer");
     arg++;
 
-    err = clSetKernelArg(cl->kernels.get_inverted_diagonal, arg, sizeof(cl_mem), &cl->csr_col_ind_buffer);
-    ocl_check(err, "clSetKernelArg failed for csr_col_ind_buffer");
+    err = clSetKernelArg(cl->kernels.update_x, arg, sizeof(cl_mem), p);
+    ocl_check(err, "clSetKernelArg failed for p");
     arg++;
 
-    err = clSetKernelArg(cl->kernels.get_inverted_diagonal, arg, sizeof(cl_mem), &cl->csr_row_ptr_buffer);
-    ocl_check(err, "clSetKernelArg failed for csr_row_ptr_buffer");
+    err = clSetKernelArg(cl->kernels.update_x, arg, sizeof(double), &alpha);
+    ocl_check(err, "clSetKernelArg failed for alpha");
     arg++;
 
-    err = clSetKernelArg(cl->kernels.get_inverted_diagonal, arg, sizeof(cl_mem), diagonal);
-    ocl_check(err, "clSetKernelArg failed for diagonal");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.get_inverted_diagonal, arg, sizeof(int), &length);
-    ocl_check(err, "clSetKernelArg failed for lenght");
+    err = clSetKernelArg(cl->kernels.update_x, arg, sizeof(int), &length);
+    ocl_check(err, "clSetKernelArg failed for length");
     arg++;
 
     // Launch the kernel
     cl_event event;
     size_t gws = round_mul_up(length, cl->lws);
-    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.get_inverted_diagonal, 1, NULL,
+    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.update_x, 1, NULL,
             &gws, &cl->lws, 0, NULL, &event);
-    ocl_check(err, "clEnqueueNDRangeKernel failed for get_inverted_diagonal");
+    ocl_check(err, "clEnqueueNDRangeKernel failed for update_x");
 
     return event;
-}
+} 
 
-cl_event mat_vec_multiply(Solver *solver, cl_mem* vec, cl_mem* result) {
+cl_event update_p(Solver* solver, cl_mem* p, cl_mem* z, double beta, int length) {
     OpenCLContext *cl = &solver->cl;
     cl_int err;
     cl_int arg = 0;
 
     // Set kernel arguments
-    err = clSetKernelArg(cl->kernels.mat_vec_multiply, arg, sizeof(cl_mem), &cl->csr_values_buffer);
-    ocl_check(err, "clSetKernelArg failed for csr_values_buffer");
+    err = clSetKernelArg(cl->kernels.update_p, arg, sizeof(cl_mem), p);
+    ocl_check(err, "clSetKernelArg failed for p");
     arg++;
 
-    err = clSetKernelArg(cl->kernels.mat_vec_multiply, arg, sizeof(cl_mem), &cl->csr_col_ind_buffer);
-    ocl_check(err, "clSetKernelArg failed for csr_col_ind_buffer");
+    err = clSetKernelArg(cl->kernels.update_p, arg, sizeof(cl_mem), z);
+    ocl_check(err, "clSetKernelArg failed for z");
     arg++;
 
-    err = clSetKernelArg(cl->kernels.mat_vec_multiply, arg, sizeof(cl_mem), &cl->csr_row_ptr_buffer);
-    ocl_check(err, "clSetKernelArg failed for csr_row_ptr_buffer");
+    err = clSetKernelArg(cl->kernels.update_p, arg, sizeof(double), &beta);
+    ocl_check(err, "clSetKernelArg failed for beta");
     arg++;
 
-    err = clSetKernelArg(cl->kernels.mat_vec_multiply, arg, sizeof(cl_mem), vec);
+    err = clSetKernelArg(cl->kernels.update_p, arg, sizeof(int), &length);
+    ocl_check(err, "clSetKernelArg failed for length");
+    arg++;
+
+    // Launch the kernel
+    cl_event event;
+    size_t gws = round_mul_up(length, cl->lws);
+    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.update_p, 1, NULL,
+            &gws, &cl->lws, 0, NULL, &event);
+    ocl_check(err, "clEnqueueNDRangeKernel failed for update_p");
+
+    return event;
+} 
+
+cl_event update_r_and_z(Solver* solver, cl_mem* r, cl_mem* Ap, cl_mem* precond, cl_mem* r_next, cl_mem* z_next, double alpha, int length) {
+    OpenCLContext *cl = &solver->cl;
+    cl_int err;
+    cl_int arg = 0;
+
+    // Set kernel arguments
+    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(cl_mem), r);
+    ocl_check(err, "clSetKernelArg failed for r");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(cl_mem), Ap);
+    ocl_check(err, "clSetKernelArg failed for Ap");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(cl_mem), precond);
+    ocl_check(err, "clSetKernelArg failed for precond");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(cl_mem), r_next);
+    ocl_check(err, "clSetKernelArg failed for r_next");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(cl_mem), z_next);
+    ocl_check(err, "clSetKernelArg failed for z_next");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(double), &alpha);
+    ocl_check(err, "clSetKernelArg failed for alpha");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(int), &length);
+    ocl_check(err, "clSetKernelArg failed for length");
+    arg++;
+
+    // Launch the kernel
+    cl_event event;
+    size_t gws = round_mul_up(length, cl->lws);
+    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.update_r, 1, NULL,
+            &gws, &cl->lws, 0, NULL, &event);
+    ocl_check(err, "clEnqueueNDRangeKernel failed for update_r");
+
+    return event;
+}
+
+cl_event compressed_matvec_mult(Solver* solver, cl_mem* vec, cl_mem* result) {
+    OpenCLContext *cl = &solver->cl;
+    cl_int err;
+    cl_int arg = 0;
+
+    // Set kernel arguments
+    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(cl_mem), &cl->cbm_values_buffer);
+    ocl_check(err, "clSetKernelArg failed for cbm_values_buffer");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(cl_int), &cl->cbm_bandwidth);
+    ocl_check(err, "clSetKernelArg failed for cbm_bandwidth");
+    arg++;
+
+    // err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(double) * cl->cbm_bandwidth, NULL);
+    // ocl_check(err, "clSetKernelArg failed for local_memory");
+    // arg++;
+
+    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(cl_mem), vec);
     ocl_check(err, "clSetKernelArg failed for vec");
     arg++;
 
-    err = clSetKernelArg(cl->kernels.mat_vec_multiply, arg, sizeof(cl_mem), result);
+    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(cl_mem), result);
     ocl_check(err, "clSetKernelArg failed for result");
     arg++;
 
-    size_t local_mem_size = sizeof(double) * cl->lws;
-    err = clSetKernelArg(cl->kernels.mat_vec_multiply, arg, local_mem_size, NULL);
-    ocl_check(err, "clSetKernelArg failed for local memory");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.mat_vec_multiply, arg, sizeof(int), &solver->size);
+    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(int), &solver->size);
     ocl_check(err, "clSetKernelArg failed for size");
     arg++;
 
     //Launch the kernel
     cl_event event;
     size_t gws = solver->size * cl->lws;
-    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.mat_vec_multiply, 1, NULL,
+    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.compressed_matvec_mult, 1, NULL,
             &gws, &cl->lws, 0, NULL, &event);
-    ocl_check(err, "clEnqueueNDRangeKernel failed for mat_vec_multiply");
+    ocl_check(err, "clEnqueueNDRangeKernel failed for compressed_matvec_mult");
 
     return event;
+}
+
+cl_event get_inverted_diagonal_compressed(Solver* solver, cl_mem* diagonal_buffer){
+    OpenCLContext *cl = &solver->cl;
+    cl_int err;
+    cl_int arg = 0;
+
+    // Set kernel arguments
+    err = clSetKernelArg(cl->kernels.get_inverted_diagonal_compressed, arg, sizeof(cl_mem), &cl->cbm_values_buffer);
+    ocl_check(err, "clSetKernelArg failed for cbm_values_buffer");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.get_inverted_diagonal_compressed, arg, sizeof(cl_int), &cl->cbm_bandwidth);
+    ocl_check(err, "clSetKernelArg failed for cbm_bandwidth");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.get_inverted_diagonal_compressed, arg, sizeof(cl_mem), diagonal_buffer);
+    ocl_check(err, "clSetKernelArg failed for diagonal_buffer");
+    arg++;
+
+    err = clSetKernelArg(cl->kernels.get_inverted_diagonal_compressed, arg, sizeof(int), &solver->size);
+    ocl_check(err, "clSetKernelArg failed for size");
+    arg++;
+
+    //Launch the kernel
+    cl_event event;
+    size_t gws = solver->size * cl->lws;
+    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.get_inverted_diagonal_compressed, 1, NULL,
+            &gws, &cl->lws, 0, NULL, &event);
+    ocl_check(err, "clEnqueueNDRangeKernel failed for get_inverted_diagonal_compressed");
+
+    return event;
+}
+
+void free_solver(Solver* solver) {
+    OpenCLContext* cl = &solver->cl;
+
+    // Release OpenCL resources
+    clReleaseMemObject(cl->b_buffer);
+    clReleaseMemObject(cl->x_buffer);
+    // clReleaseMemObject(cl->csr_row_ptr_buffer);
+    // clReleaseMemObject(cl->csr_col_ind_buffer);
+    // clReleaseMemObject(cl->csr_values_buffer);
+
+    clReleaseKernel(cl->kernels.partial_sum_reduction);
+    clReleaseKernel(cl->kernels.dot_product);
+    clReleaseKernel(cl->kernels.mat_vec_multiply);
+    clReleaseKernel(cl->kernels.mult_vectors);
+    clReleaseKernel(cl->kernels.sum_vectors);
+    clReleaseKernel(cl->kernels.scale_vector);
+    clReleaseKernel(cl->kernels.get_inverted_diagonal);
+    clReleaseKernel(cl->kernels.update_x);
+    clReleaseKernel(cl->kernels.update_p);
+    clReleaseKernel(cl->kernels.update_r);
+    clReleaseKernel(cl->kernels.compressed_matvec_mult);
+    clReleaseKernel(cl->kernels.get_inverted_diagonal_compressed);
+
+
+    clReleaseProgram(cl->prog);
+    clReleaseCommandQueue(cl->q);
+    clReleaseContext(cl->ctx);
+
+    // Free the solver structure
+    free(solver->x);
+}   
+
+void print_buffer(OpenCLContext *cl, cl_mem buf, size_t size, int n) {
+    double* temp = malloc(size);
+    if (!temp) {
+        fprintf(stderr, "malloc failed\n");
+        exit(1);
+    }
+
+    clFinish(cl->q);  // Assicura che tutte le operazioni siano terminate
+    cl_int err = clEnqueueReadBuffer(cl->q, buf, CL_TRUE, 0, size, temp, 0, NULL, NULL);
+    ocl_check(err, "print_buffer read");
+
+    for (int i = 0; i < n; i++) {
+        printf(" %.2f ", temp[i]);
+    }
+    printf("\n");
+    free(temp);
+}
+
+double profiling_event(cl_event event) {
+    cl_ulong start, end;
+    clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_START, sizeof(start), &start, NULL);
+    clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END, sizeof(end), &end, NULL);
+    return (end - start) / 1e6; // Convert to milliseconds
+}
+
+double dot_product_handler(Solver *solver, cl_mem *vec1, cl_mem *vec2, int length) {
+    OpenCLContext *cl = &solver->cl;
+    cl_int err;
+
+    //Partial dot product
+    cl_mem partial_dot_product = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, sizeof(double) * length, NULL, &err);
+    cl_event dot_event = dot_product(solver, vec1, vec2, &partial_dot_product, length);
+    clWaitForEvents(1, &dot_event);
+
+    // Profiling
+    double t = profiling_event(dot_event);
+    printf("%-40s %-6.3f ms\n", "\tdot_product kernel:", t);
+
+    clReleaseEvent(dot_event);
+
+    size_t nels_vec4 = (solver->size + 3) / 4;
+    size_t num_groups = round_div_up(nels_vec4, cl->lws);
+
+    cl_mem temp_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, num_groups * sizeof(double), NULL, NULL);
+
+    cl_mem *in_buf = &partial_dot_product;
+    cl_mem *out_buf = &temp_buffer;
+
+    double total_time = 0.0;
+    t = 0.0;
+    while(num_groups > 1) {
+        // Perform partial sum reduction
+        cl_event partial_sum_evt = reduce_sum4_double4_sliding(solver, in_buf, out_buf, num_groups);
+        clWaitForEvents(1, &partial_sum_evt);
+
+        // Profiling
+        t = profiling_event(partial_sum_evt);
+        total_time += t;
+
+        clReleaseEvent(partial_sum_evt);
+
+        // Swap buffers
+        cl_mem temp = *in_buf;
+        *in_buf = *out_buf;
+        *out_buf = temp;
+
+        num_groups = round_div_up(num_groups, 4 * cl->lws);
+    }
+
+    printf("%-40s %-6.3f ms\n", "\treduce_sum4_double4_sliding kernel (total):", total_time);
+
+    double final_result;
+    clEnqueueReadBuffer(cl->q, *in_buf, CL_TRUE, 0, sizeof(double), &final_result, 0, NULL, NULL);
+    
+    clReleaseMemObject(partial_dot_product);
+    clReleaseMemObject(temp_buffer);
+
+    return final_result;
 }
 
 cl_event sum_vectors(Solver* solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int length) {
@@ -737,277 +875,6 @@ cl_event mult_vectors(Solver* solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result
     return event;
 }
 
-cl_event update_x(Solver* solver, cl_mem* p, double alpha, int length) {
-    OpenCLContext *cl = &solver->cl;
-    cl_int err;
-    cl_int arg = 0;
-
-    // Set kernel arguments
-    err = clSetKernelArg(cl->kernels.update_x, arg, sizeof(cl_mem), &cl->x_buffer);
-    ocl_check(err, "clSetKernelArg failed for x_buffer");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.update_x, arg, sizeof(cl_mem), p);
-    ocl_check(err, "clSetKernelArg failed for p");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.update_x, arg, sizeof(double), &alpha);
-    ocl_check(err, "clSetKernelArg failed for alpha");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.update_x, arg, sizeof(int), &length);
-    ocl_check(err, "clSetKernelArg failed for length");
-    arg++;
-
-    // Launch the kernel
-    cl_event event;
-    size_t gws = round_mul_up(length, cl->lws);
-    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.update_x, 1, NULL,
-            &gws, &cl->lws, 0, NULL, &event);
-    ocl_check(err, "clEnqueueNDRangeKernel failed for update_x");
-
-    return event;
-} 
-
-cl_event update_p(Solver* solver, cl_mem* p, cl_mem* z, double beta, int length) {
-    OpenCLContext *cl = &solver->cl;
-    cl_int err;
-    cl_int arg = 0;
-
-    // Set kernel arguments
-    err = clSetKernelArg(cl->kernels.update_p, arg, sizeof(cl_mem), p);
-    ocl_check(err, "clSetKernelArg failed for p");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.update_p, arg, sizeof(cl_mem), z);
-    ocl_check(err, "clSetKernelArg failed for z");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.update_p, arg, sizeof(double), &beta);
-    ocl_check(err, "clSetKernelArg failed for beta");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.update_p, arg, sizeof(int), &length);
-    ocl_check(err, "clSetKernelArg failed for length");
-    arg++;
-
-    // Launch the kernel
-    cl_event event;
-    size_t gws = round_mul_up(length, cl->lws);
-    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.update_p, 1, NULL,
-            &gws, &cl->lws, 0, NULL, &event);
-    ocl_check(err, "clEnqueueNDRangeKernel failed for update_p");
-
-    return event;
-} 
-
-cl_event update_r_evt(Solver* solver, cl_mem* r, cl_mem* r_next, double alpha, int length) {
-    OpenCLContext *cl = &solver->cl;
-    cl_int err;
-    cl_int arg = 0;
-
-    // Set kernel arguments
-    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(cl_mem), r);
-    ocl_check(err, "clSetKernelArg failed for r");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(cl_mem), r_next);
-    ocl_check(err, "clSetKernelArg failed for r_next");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(double), &alpha);
-    ocl_check(err, "clSetKernelArg failed for alpha");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.update_r, arg, sizeof(int), &length);
-    ocl_check(err, "clSetKernelArg failed for length");
-    arg++;
-
-    // Launch the kernel
-    cl_event event;
-    size_t gws = round_mul_up(length, cl->lws);
-    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.update_r, 1, NULL,
-            &gws, &cl->lws, 0, NULL, &event);
-    ocl_check(err, "clEnqueueNDRangeKernel failed for update_r");
-
-    return event;
-}
-
-cl_event compressed_matvec_mult(Solver* solver, cl_mem* vec, cl_mem* result) {
-    OpenCLContext *cl = &solver->cl;
-    cl_int err;
-    cl_int arg = 0;
-
-    // Set kernel arguments
-    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(cl_mem), &cl->cbm_values_buffer);
-    ocl_check(err, "clSetKernelArg failed for cbm_values_buffer");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(cl_int), &cl->cbm_bandwidth);
-    ocl_check(err, "clSetKernelArg failed for cbm_bandwidth");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(cl_mem), vec);
-    ocl_check(err, "clSetKernelArg failed for vec");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(cl_mem), result);
-    ocl_check(err, "clSetKernelArg failed for result");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.compressed_matvec_mult, arg, sizeof(int), &solver->size);
-    ocl_check(err, "clSetKernelArg failed for size");
-    arg++;
-
-    //Launch the kernel
-    cl_event event;
-    size_t gws = solver->size * cl->lws;
-    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.compressed_matvec_mult, 1, NULL,
-            &gws, &cl->lws, 0, NULL, &event);
-    ocl_check(err, "clEnqueueNDRangeKernel failed for compressed_matvec_mult");
-
-    return event;
-}
-
-cl_event get_inverted_diagonal_compressed(Solver* solver, cl_mem* diagonal_buffer){
-    OpenCLContext *cl = &solver->cl;
-    cl_int err;
-    cl_int arg = 0;
-
-    // Set kernel arguments
-    err = clSetKernelArg(cl->kernels.get_inverted_diagonal_compressed, arg, sizeof(cl_mem), &cl->cbm_values_buffer);
-    ocl_check(err, "clSetKernelArg failed for cbm_values_buffer");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.get_inverted_diagonal_compressed, arg, sizeof(cl_int), &cl->cbm_bandwidth);
-    ocl_check(err, "clSetKernelArg failed for cbm_bandwidth");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.get_inverted_diagonal_compressed, arg, sizeof(cl_mem), diagonal_buffer);
-    ocl_check(err, "clSetKernelArg failed for diagonal_buffer");
-    arg++;
-
-    err = clSetKernelArg(cl->kernels.get_inverted_diagonal_compressed, arg, sizeof(int), &solver->size);
-    ocl_check(err, "clSetKernelArg failed for size");
-    arg++;
-
-    //Launch the kernel
-    cl_event event;
-    size_t gws = solver->size * cl->lws;
-    err = clEnqueueNDRangeKernel(cl->q, cl->kernels.get_inverted_diagonal_compressed, 1, NULL,
-            &gws, &cl->lws, 0, NULL, &event);
-    ocl_check(err, "clEnqueueNDRangeKernel failed for get_inverted_diagonal_compressed");
-
-    return event;
-}
-
-void free_solver(Solver* solver) {
-    OpenCLContext* cl = &solver->cl;
-
-    // Release OpenCL resources
-    clReleaseMemObject(cl->b_buffer);
-    clReleaseMemObject(cl->x_buffer);
-    clReleaseMemObject(cl->csr_row_ptr_buffer);
-    clReleaseMemObject(cl->csr_col_ind_buffer);
-    clReleaseMemObject(cl->csr_values_buffer);
-
-    clReleaseKernel(cl->kernels.partial_sum_reduction);
-    clReleaseKernel(cl->kernels.dot_product);
-    clReleaseKernel(cl->kernels.mat_vec_multiply);
-    clReleaseKernel(cl->kernels.mult_vectors);
-    clReleaseKernel(cl->kernels.sum_vectors);
-    clReleaseKernel(cl->kernels.scale_vector);
-    clReleaseKernel(cl->kernels.get_inverted_diagonal);
-
-    clReleaseProgram(cl->prog);
-    clReleaseCommandQueue(cl->q);
-    clReleaseContext(cl->ctx);
-
-    // Free the solver structure
-    free(solver->x);
-}   
-
-void print_buffer(OpenCLContext *cl, cl_mem buf, size_t size, int n) {
-    double* temp = malloc(size);
-    if (!temp) {
-        fprintf(stderr, "malloc failed\n");
-        exit(1);
-    }
-
-    clFinish(cl->q);  // Assicura che tutte le operazioni siano terminate
-    cl_int err = clEnqueueReadBuffer(cl->q, buf, CL_TRUE, 0, size, temp, 0, NULL, NULL);
-    ocl_check(err, "print_buffer read");
-
-    for (int i = 0; i < n; i++) {
-        printf(" %.2f ", temp[i]);
-    }
-    printf("\n");
-    free(temp);
-}
-
-double profiling_event(cl_event event) {
-    cl_ulong start, end;
-    clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_START, sizeof(start), &start, NULL);
-    clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END, sizeof(end), &end, NULL);
-    return (end - start) / 1e6; // Convert to milliseconds
-}
-
-double dot_product_handler(Solver *solver, cl_mem *vec1, cl_mem *vec2, int length) {
-    OpenCLContext *cl = &solver->cl;
-    cl_int err;
-
-    //Partial dot product
-    cl_mem partial_dot_product = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, sizeof(double) * length, NULL, &err);
-    cl_event dot_event = dot_product(solver, vec1, vec2, &partial_dot_product, length);
-    clWaitForEvents(1, &dot_event);
-
-    // Profiling
-    double t = profiling_event(dot_event);
-    printf("%-40s %-6.3f ms\n", "\tdot_product kernel:", t);
-
-    clReleaseEvent(dot_event);
-
-    size_t nels_vec4 = (solver->size + 3) / 4;
-    size_t num_groups = round_div_up(nels_vec4, cl->lws);
-
-    cl_mem temp_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, num_groups * sizeof(double), NULL, NULL);
-
-    cl_mem *in_buf = &partial_dot_product;
-    cl_mem *out_buf = &temp_buffer;
-
-    double total_time = 0.0;
-    t = 0.0;
-    while(num_groups > 1) {
-        // Perform partial sum reduction
-        cl_event partial_sum_evt = reduce_sum4_double4_sliding(solver, in_buf, out_buf, num_groups);
-        clWaitForEvents(1, &partial_sum_evt);
-
-        // Profiling
-        t = profiling_event(partial_sum_evt);
-        total_time += t;
-
-        clReleaseEvent(partial_sum_evt);
-
-        // Swap buffers
-        cl_mem temp = *in_buf;
-        *in_buf = *out_buf;
-        *out_buf = temp;
-
-        num_groups = round_div_up(num_groups, 4 * cl->lws);
-    }
-
-    printf("%-40s %-6.3f ms\n", "\treduce_sum4_double4_sliding kernel (total):", total_time);
-
-    double final_result;
-    clEnqueueReadBuffer(cl->q, *in_buf, CL_TRUE, 0, sizeof(double), &final_result, 0, NULL, NULL);
-    
-    clReleaseMemObject(partial_dot_product);
-    clReleaseMemObject(temp_buffer);
-
-    return final_result;
-}
-
-
 // DEPRECATED (IDK YET)
 // double dot_product_handler(Solver *solver, cl_mem *vec1, cl_mem *vec2, int length) {
 //     OpenCLContext *cl = &solver->cl;
@@ -1060,150 +927,4 @@ double dot_product_handler(Solver *solver, cl_mem *vec1, cl_mem *vec2, int lengt
 //     clReleaseMemObject(temp_buffer);
 
 //     return final_result;
-// }
-
-// DEPRECATED FOR REAL !!!!!!!! TOO SLOW I CAN DO BETTER SWEAR TO GOD 
-
-// void update_x(Solver *solver, cl_mem* p, double alpha, int length, TemporaryBuffers* temp) {
-//     OpenCLContext *cl = &solver->cl;
-//     cl_int err;
-
-//     // alpha * p
-//     printf("\t(alpha * p)\n");
-//     cl_event scale_vector_evt = scale_vector(solver, p, alpha, &temp->x, length);
-//     clWaitForEvents(1, &scale_vector_evt);
-
-//     // profiling
-//     double t = profiling_event(scale_vector_evt);
-//     printf("%-40s %-6.3f ms\n", "\tscale_vector kernel:", t);
-//     clReleaseEvent(scale_vector_evt);
-
-//     // Add the scaled p to x
-//     printf("\t(x + alpha * p)\n");
-//     cl_event sum_vectors_evt = sum_vectors(solver, &cl->x_buffer, &temp->x, &cl->x_buffer, length);
-//     clWaitForEvents(1, &sum_vectors_evt);
-
-//     // profiling
-//     t = profiling_event(sum_vectors_evt);
-//     printf("%-40s %-6.3f ms\n", "\tsum_vectors kernel:", t);    
-//     clReleaseEvent(sum_vectors_evt);
-// }   
-
-
-
-// double dot_product_handler(Solver *solver, cl_mem *vec1, cl_mem *vec2, int length) {
-//     OpenCLContext *cl = &solver->cl;
-//     cl_int err;
-//     size_t num_groups = length / 4;
-
-//     //Partial dot product
-//     cl_mem partial_dot_product = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, sizeof(double) * num_groups, NULL, &err);
-//     cl_event dot_event = dot_product_vec4(solver, vec1, vec2, &partial_dot_product, length);
-//     clWaitForEvents(1, &dot_event);
-
-//     // Profiling
-//     double t = profiling_event(dot_event);
-//     printf("%-40s %-6.3f ms\n", "\tdot_product kernel:", t);
-//     clReleaseEvent(dot_event);
-
-//     cl_mem temp_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, num_groups * sizeof(double), NULL, NULL);
-
-//     cl_mem *in_buf = &partial_dot_product;
-//     cl_mem *out_buf = &temp_buffer;
-
-//     double total_time = 0.0;
-//     t = 0.0;
-//     while(num_groups > 1) {
-//         // Perform partial sum reduction
-//         cl_event partial_sum_evt = partial_sum_reduction(solver, in_buf, out_buf, num_groups);
-//         clWaitForEvents(1, &partial_sum_evt);
-
-//         // Profiling
-//         t = profiling_event(partial_sum_evt);
-//         total_time += t;
-
-//         clReleaseEvent(partial_sum_evt);
-
-//         // Swap buffers
-//         cl_mem temp = *in_buf;
-//         *in_buf = *out_buf;
-//         *out_buf = temp;
-
-//         num_groups = round_div_up(num_groups, cl->lws);
-//     }
-
-//     printf("%-40s %-6.3f ms\n", "\tpartial_sum_reduction kernel (total):", total_time);
-
-//     double final_result;
-//     clEnqueueReadBuffer(cl->q, *in_buf, CL_TRUE, 0, sizeof(double), &final_result, 0, NULL, NULL);
-    
-//     clReleaseMemObject(partial_dot_product);
-//     clReleaseMemObject(temp_buffer);
-
-//     return final_result;
-// }
-
-
-
-// cl_event dot_product(Solver *solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result, int length) {
-//     OpenCLContext *cl = &solver->cl;
-//     cl_int err;
-//     cl_int arg = 0;
-
-//     // Set kernel arguments
-//     err = clSetKernelArg(cl->kernels.dot_product, arg, sizeof(cl_mem), vec1);
-//     ocl_check(err, "clSetKernelArg failed for vec1");
-//     arg++;
-
-//     err = clSetKernelArg(cl->kernels.dot_product, arg, sizeof(cl_mem), vec2);
-//     ocl_check(err, "clSetKernelArg failed for vec2");
-//     arg++;  
-
-//     err = clSetKernelArg(cl->kernels.dot_product, arg, sizeof(cl_mem), result);
-//     ocl_check(err, "clSetKernelArg failed for result");
-//     arg++;
-
-//     err = clSetKernelArg(cl->kernels.dot_product, arg, cl->lws * sizeof(double), NULL);
-//     ocl_check(err, "clSetKernelArg failed for local_memory");
-//     arg++;
-
-//     err = clSetKernelArg(cl->kernels.dot_product, arg, sizeof(int), &length);
-//     ocl_check(err, "clSetKernelArg failed for lenght");
-//     arg++;
-
-//     // Launch the kernel
-//     cl_event event;
-//     size_t gws = round_mul_up(length, cl->lws);
-//     err = clEnqueueNDRangeKernel(cl->q, cl->kernels.dot_product, 1, NULL,
-//             &gws, &cl->lws, 0, NULL, &event);
-//     ocl_check(err, "clEnqueueNDRangeKernel failed");    
-
-//     return event;
-// }
-
-
-
-// void update_p(Solver *solver, cl_mem* z, cl_mem* p, double beta, int length, TemporaryBuffers* temp) {
-//     OpenCLContext *cl = &solver->cl;
-//     cl_int err;
-    
-//     // Scale the previous search direction p by beta
-//     printf("\t(beta * p)\n");
-//     cl_event scale_vector_evt = scale_vector(solver, p, beta, &temp->p, length);
-//     clWaitForEvents(1, &scale_vector_evt);
-
-//     // profiling
-//     double t = profiling_event(scale_vector_evt);
-//     printf("%-40s %-6.3f ms\n", "\tscale_vector kernel:", t);
-//     clReleaseEvent(scale_vector_evt);
-
-//     // Add the new residue r to the scaled search direction
-//     printf("\t(z + beta * p)\n");
-//     cl_event sum_vectors_evt = sum_vectors(solver, z, &temp->p, p, length);
-//     clWaitForEvents(1, &sum_vectors_evt);
-
-//     // profiling
-//     t = profiling_event(sum_vectors_evt);
-//     printf("%-40s %-6.3f ms\n", "\tsum_vectors kernel:", t);
-//     clReleaseEvent(sum_vectors_evt);
 // }
