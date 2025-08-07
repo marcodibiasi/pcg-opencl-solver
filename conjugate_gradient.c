@@ -164,8 +164,6 @@ void conjugate_gradient(Solver* solver) {
     cl_mem diagonal_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, length * sizeof(double), NULL, &err); 
     ocl_check(err, "clCreateBuffer failed for diagonal_buffer");
 
-    // cl_event inverted_diagonal = get_inverted_diagonal(solver, &diagonal_buffer, length);
-    // cl_event inverted_diagonal = get_inverted_diagonal_compressed(solver, &diagonal_buffer, length);
     cl_event inverted_diagonal = get_inverted_diagonal_compressed(solver, &diagonal_buffer);
     clWaitForEvents(1, &inverted_diagonal);
     clReleaseEvent(inverted_diagonal);
@@ -258,11 +256,12 @@ void conjugate_gradient(Solver* solver) {
         double nextrz_t = profiling_event(next_r_z);
         printf("%-40s %-6.3f ms\n", "\tupdate_r_and_z kernel:", nextrz_t);
         clReleaseEvent(next_r_z);
-        
-        // printf("\nCALCULATE ||r_(k+1)||^2\n");    
+
+        printf("\nCALCULATE ||r_(k+1)||^2\n");    
         // Calculate the norm of the new residue ||r_(k+1)||^2
         r_norm = dot_product_handler(solver, &r_next_buffer, &r_next_buffer, length);
         printf("\n\tResidue norm = %g\n", r_norm);
+
 
         // beta = dot(r_(k+1), z_(k+1)) / dot(r, z)
         printf("\nBETA CALCULATE\n");
@@ -288,6 +287,7 @@ void conjugate_gradient(Solver* solver) {
         tmp = z_buffer;
         z_buffer = z_next_buffer;
         z_next_buffer = tmp;
+
 
         clock_gettime(CLOCK_MONOTONIC, &iter_end);
         double iter_elapsed = (iter_end.tv_sec - iter_start.tv_sec) + (iter_end.tv_nsec - iter_start.tv_nsec) / 1e9;
@@ -332,10 +332,10 @@ double alpha_calculate(Solver* solver, cl_mem *r, cl_mem *z, cl_mem *p, Temporar
     cl_event mat_vec_multiply_evt = compressed_matvec_mult(solver, p, &temp->Ap);
 
     //USELESS WAIT FOR EVENT
-    clWaitForEvents(1, &mat_vec_multiply_evt);
-    double t = profiling_event(mat_vec_multiply_evt);
-    printf("%-40s %-6.3f ms\n", "\tmat_vec_multiply kernel:", t);
-    clReleaseEvent(mat_vec_multiply_evt);
+    // clWaitForEvents(1, &mat_vec_multiply_evt);
+    // double t = profiling_event(mat_vec_multiply_evt);
+    // printf("%-40s %-6.3f ms\n", "\tmat_vec_multiply kernel:", t);
+    // clReleaseEvent(mat_vec_multiply_evt);
 
     double denominator = dot_product_handler(solver, p, &temp->Ap, length);
 
@@ -874,57 +874,3 @@ cl_event mult_vectors(Solver* solver, cl_mem* vec1, cl_mem* vec2, cl_mem* result
 
     return event;
 }
-
-// DEPRECATED (IDK YET)
-// double dot_product_handler(Solver *solver, cl_mem *vec1, cl_mem *vec2, int length) {
-//     OpenCLContext *cl = &solver->cl;
-//     cl_int err;
-
-//     //Partial dot product
-//     size_t num_groups = round_div_up(solver->size, cl->lws);
-//     cl_mem partial_dot_product = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, sizeof(double) * num_groups, NULL, &err);
-//     cl_event dot_event = dot_product(solver, vec1, vec2, &partial_dot_product, length);
-//     clWaitForEvents(1, &dot_event);
-
-//     // Profiling
-//     double t = profiling_event(dot_event);
-//     printf("%-40s %-6.3f ms\n", "\tdot_product kernel:", t);
-
-//     clReleaseEvent(dot_event);
-
-//     cl_mem temp_buffer = clCreateBuffer(cl->ctx, CL_MEM_READ_WRITE, num_groups * sizeof(double), NULL, NULL);
-
-//     cl_mem *in_buf = &partial_dot_product;
-//     cl_mem *out_buf = &temp_buffer;
-
-//     double total_time = 0.0;
-//     t = 0.0;
-//     while(num_groups > 1) {
-//         // Perform partial sum reduction
-//         cl_event partial_sum_evt = partial_sum_reduction(solver, in_buf, out_buf, num_groups);
-//         clWaitForEvents(1, &partial_sum_evt);
-
-//         // Profiling
-//         t = profiling_event(partial_sum_evt);
-//         total_time += t;
-
-//         clReleaseEvent(partial_sum_evt);
-
-//         // Swap buffers
-//         cl_mem temp = *in_buf;
-//         *in_buf = *out_buf;
-//         *out_buf = temp;
-
-//         num_groups = round_div_up(num_groups, cl->lws);
-//     }
-
-//     printf("%-40s %-6.3f ms\n", "\tpartial_sum_reduction kernel (total):", total_time);
-
-//     double final_result;
-//     clEnqueueReadBuffer(cl->q, *in_buf, CL_TRUE, 0, sizeof(double), &final_result, 0, NULL, NULL);
-    
-//     clReleaseMemObject(partial_dot_product);
-//     clReleaseMemObject(temp_buffer);
-
-//     return final_result;
-// }

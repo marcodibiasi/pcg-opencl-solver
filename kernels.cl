@@ -39,8 +39,7 @@ __kernel void reduce_sum4_double4_sliding(
     const int group_id = get_group_id(0);
     const int num_groups = get_num_groups(0);
 
-    // Calcolo gli elementi double4 per group
-    const int nels_vec = (n_els + 3) / 4; // elementi double4 totali
+    const int nels_vec = (n_els + 3) / 4; 
     const int vecs_per_group_min = (nels_vec - 1) / num_groups + 1;
     const int vecs_per_group = lws * ((vecs_per_group_min - 1) / lws + 1);
 
@@ -53,7 +52,6 @@ __kernel void reduce_sum4_double4_sliding(
         double val = 0.0;
         if (gi < nels_vec) {
             double4 d = in[gi];
-            // Devo gestire il caso finale con <4 elementi
             int base = gi * 4;
             if (base + 3 < n_els)
                 val = d.x + d.y + d.z + d.w;
@@ -68,7 +66,6 @@ __kernel void reduce_sum4_double4_sliding(
         local_memory[li] = val;
         barrier(CLK_LOCAL_MEM_FENCE);
 
-        // Riduzione in local
         for (int stride = lws / 2; stride > 0; stride >>= 1) {
             if (li < stride)
                 local_memory[li] += local_memory[li + stride];
